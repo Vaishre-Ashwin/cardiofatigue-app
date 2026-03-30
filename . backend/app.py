@@ -3,11 +3,17 @@ import uuid
 import pandas as pd
 from datetime import datetime
 
+# 🔥 FIX: ADD PATH FOR IMPORTS
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
 from translations import TRANSLATIONS
 from signal_processing import extract_ppg_features
 from model import analyze_cardiofatigue
 from db import load_reports, save_report
 
+# 🔵 SERVICES (now will work)
 from services.quality import check_signal_quality
 from services.history import get_user_history, update_user_history, compute_trend
 from services.explainability import generate_explanation
@@ -52,15 +58,11 @@ else:
         st.session_state.name = ""
         st.rerun()
 
-    # =========================
-    # NEW SCREENING PAGE
-    # =========================
     if page == t["new_screening"]:
         st.title(t["app_title"])
         st.write(f"Welcome, {st.session_state.name}")
-        st.info("This app provides early screening support only. It does not diagnose disease.")
+        st.info("This app provides screening only (not diagnosis).")
 
-        # Inputs
         col1, col2 = st.columns(2)
 
         with col1:
@@ -75,27 +77,27 @@ else:
 
         st.subheader("PPG Input")
         ppg_values_text = st.text_area(
-            "Paste PPG values (comma separated)",
-            "0.2,0.4,0.5,0.45,0.6,0.55,0.4,0.42,0.50,0.47,0.58,0.53"
+            "Paste PPG values",
+            "0.2,0.4,0.5,0.45,0.6,0.55,0.4,0.42"
         )
 
         if st.button(t["analyze"]):
 
-            with st.spinner("Analyzing your data..."):
+            with st.spinner("Analyzing..."):
 
                 try:
                     ppg_values = [float(x.strip()) for x in ppg_values_text.split(",") if x.strip()]
                 except:
                     ppg_values = []
 
-                # QUALITY CHECK
+                # QUALITY
                 quality_score, is_valid = check_signal_quality(ppg_values)
 
                 if not is_valid:
                     st.error(f"Poor signal quality (Score: {quality_score})")
                     st.stop()
 
-                # SIGNAL PROCESSING
+                # FEATURES
                 ppg_features = extract_ppg_features(ppg_values)
 
                 hr_est = ppg_features.get("hr_est", 0)
@@ -110,8 +112,6 @@ else:
                     "exercise_intolerance": exercise_intolerance,
                     "ppg_quality_score": ppg_features.get("ppg_quality_score", 0),
                     "hr_est": hr_est,
-
-                    # For explainability
                     "hr": hr_est,
                     "stress": stress_score,
                     "hrv": hrv_val
@@ -131,7 +131,7 @@ else:
                     confidence=result.get("score", 0) / 100
                 )
 
-                # LLM SAFE CALL
+                # LLM SAFE
                 try:
                     llm_output = generate_llm_response(result["risk"], features, explanation)
                 except:
@@ -144,24 +144,12 @@ else:
                     "user_id": st.session_state.user_id,
                     "name": st.session_state.name,
                     "created_at": datetime.now().isoformat(),
-                    "fatigue": fatigue,
-                    "dizziness": dizziness,
-                    "sleep_hours": sleep_hours,
-                    "stress_score": stress_score,
-                    "palpitations": palpitations,
-                    "exercise_intolerance": exercise_intolerance,
-                    "ppg_quality_score": ppg_features.get("ppg_quality_score", 0),
-                    "hr_est": hr_est,
                     "risk_score": result["score"],
                     "risk_label": result["risk"]
                 }
                 save_report(report)
 
-            # ================= UI OUTPUT =================
-
-            st.subheader("Results")
-
-            # COLOR RESULT
+            # UI OUTPUT
             if result["risk"] == "Low":
                 st.success("🟢 Low Risk")
             elif result["risk"] == "Moderate":
@@ -171,41 +159,30 @@ else:
 
             st.progress(result["score"] / 100)
 
-            # METRICS
             col1, col2, col3 = st.columns(3)
-            col1.metric("Heart Rate", hr_est)
+            col1.metric("HR", hr_est)
             col2.metric("Fatigue", fatigue)
             col3.metric("Stress", stress_score)
 
-            st.write(f"Risk Score: {result['score']}")
+            st.write(f"Score: {result['score']}")
 
-            st.subheader("Signal Quality")
-            st.metric("Quality Score", f"{quality_score}/100")
+            st.metric("Signal Quality", f"{quality_score}/100")
 
-            st.subheader("Explanation")
             st.info(explanation)
-
-            st.subheader("AI Assistant")
             st.info(llm_output)
 
-            st.subheader("Doctor Suggestion")
-            st.write(result["doctor_suggestion"])
-
-            st.subheader("Signal Features")
             st.write(ppg_features)
 
-    # ================= HISTORY =================
     elif page == t["history"]:
         st.title("History")
         reports = load_reports()
         user_reports = [r for r in reports if r["user_id"] == st.session_state.user_id]
 
         if user_reports:
-            st.dataframe(pd.DataFrame(user_reports), use_container_width=True)
+            st.dataframe(pd.DataFrame(user_reports))
         else:
             st.warning("No reports yet.")
 
-    # ================= WEEKLY MAP =================
     elif page == t["weekly_map"]:
         st.title("Weekly Map")
         reports = load_reports()
@@ -215,7 +192,6 @@ else:
             df = pd.DataFrame(user_reports)
             df["created_at"] = pd.to_datetime(df["created_at"])
             df = df.sort_values("created_at")
-
             st.line_chart(df.set_index("created_at")["risk_score"])
         else:
             st.warning("No reports yet.")
