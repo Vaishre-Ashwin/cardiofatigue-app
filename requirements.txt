@@ -5,3 +5,5 @@ scipy
 scikit-learn
 matplotlib
 opencv-python
+google-generativeai
+joblib
