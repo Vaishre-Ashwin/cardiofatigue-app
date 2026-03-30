@@ -8,6 +8,12 @@ from signal_processing import extract_ppg_features
 from model import analyze_cardiofatigue
 from db import load_reports, save_report
 
+# 🔵 NEW IMPORTS
+from services.quality import check_signal_quality
+from services.history import get_user_history, update_user_history, compute_trend
+from services.explainability import generate_explanation
+from services.llm_service import generate_llm_response
+
 st.set_page_config(page_title="CardioFatigue AI", layout="wide")
 
 t = TRANSLATIONS["English"]
@@ -71,6 +77,14 @@ else:
             except:
                 ppg_values = []
 
+            # 🔵 NEW: SIGNAL QUALITY CHECK
+            quality_score, is_valid = check_signal_quality(ppg_values)
+
+            if not is_valid:
+                st.error(f"Poor signal quality (Score: {quality_score}). Please retry.")
+                st.stop()
+
+            # EXISTING
             ppg_features = extract_ppg_features(ppg_values)
 
             features = {
@@ -81,10 +95,38 @@ else:
                 "palpitations": palpitations,
                 "exercise_intolerance": exercise_intolerance,
                 "ppg_quality_score": ppg_features["ppg_quality_score"],
-                "hr_est": ppg_features["hr_est"]
+                "hr_est": ppg_features["hr_est"],
+
+                # 🔵 NEW (for explainability)
+                "hr": ppg_features["hr_est"],
+                "stress": stress_score,
+                "fatigue": fatigue,
+                "hrv": ppg_features.get("hrv", 25)
             }
 
             result = analyze_cardiofatigue(features)
+
+            # 🔵 NEW: TREND ANALYSIS
+            history = get_user_history(st.session_state.user_id)
+            trend = compute_trend(history, features)
+            features.update(trend)
+
+            # 🔵 NEW: EXPLAINABILITY
+            explanation = generate_explanation(
+                features,
+                prediction=1 if result["risk"] != "Low" else 0,
+                confidence=result.get("score", 0) / 100
+            )
+
+            # 🔵 NEW: LLM (Gemini)
+            llm_output = generate_llm_response(
+                result["risk"],
+                features,
+                explanation
+            )
+
+            # 🔵 NEW: UPDATE HISTORY
+            update_user_history(st.session_state.user_id, features)
 
             report = {
                 "user_id": st.session_state.user_id,
@@ -108,6 +150,16 @@ else:
             st.write(f"Risk Score: {result['score']}")
             st.write(result["message"])
             st.write(result["doctor_suggestion"])
+
+            # 🔵 NEW DISPLAY
+            st.subheader("Signal Quality")
+            st.write(f"Quality Score: {quality_score}")
+
+            st.subheader("Advanced Explanation")
+            st.write(explanation)
+
+            st.subheader("AI Assistant")
+            st.info(llm_output)
 
             st.subheader("Signal Features")
             st.write(ppg_features)
