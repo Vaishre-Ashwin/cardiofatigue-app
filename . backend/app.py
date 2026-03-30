@@ -8,7 +8,6 @@ from signal_processing import extract_ppg_features
 from model import analyze_cardiofatigue
 from db import load_reports, save_report
 
-# 🔵 NEW IMPORTS
 from services.quality import check_signal_quality
 from services.history import get_user_history, update_user_history, compute_trend
 from services.explainability import generate_explanation
@@ -18,13 +17,12 @@ st.set_page_config(page_title="CardioFatigue AI", layout="wide")
 
 t = TRANSLATIONS["English"]
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_id" not in st.session_state:
-    st.session_state.user_id = ""
-if "name" not in st.session_state:
-    st.session_state.name = ""
+# Session state
+for key in ["logged_in", "user_id", "name"]:
+    if key not in st.session_state:
+        st.session_state[key] = False if key == "logged_in" else ""
 
+# LOGIN
 if not st.session_state.logged_in:
     st.title(t["app_title"])
     st.subheader(t["subtitle"])
@@ -43,6 +41,7 @@ if not st.session_state.logged_in:
         else:
             st.error("Please fill all fields.")
 
+# MAIN APP
 else:
     page = st.sidebar.radio("Go to", [t["new_screening"], t["history"], t["weekly_map"]])
     st.sidebar.write(f"User ID: {st.session_state.user_id}")
@@ -53,138 +52,170 @@ else:
         st.session_state.name = ""
         st.rerun()
 
+    # =========================
+    # NEW SCREENING PAGE
+    # =========================
     if page == t["new_screening"]:
         st.title(t["app_title"])
         st.write(f"Welcome, {st.session_state.name}")
         st.info("This app provides early screening support only. It does not diagnose disease.")
 
-        fatigue = st.slider(t["fatigue"], 0, 10, 5)
-        dizziness = st.slider(t["dizziness"], 0, 10, 2)
-        sleep_hours = st.slider(t["sleep"], 0.0, 12.0, 7.0)
-        stress_score = st.slider(t["stress"], 0, 10, 4)
-        palpitations = st.checkbox(t["palpitations"])
-        exercise_intolerance = st.checkbox(t["exercise_intolerance"])
+        # Inputs
+        col1, col2 = st.columns(2)
 
-        st.subheader("Prototype PPG Input")
+        with col1:
+            fatigue = st.slider(t["fatigue"], 0, 10, 5)
+            dizziness = st.slider(t["dizziness"], 0, 10, 2)
+            sleep_hours = st.slider(t["sleep"], 0.0, 12.0, 7.0)
+
+        with col2:
+            stress_score = st.slider(t["stress"], 0, 10, 4)
+            palpitations = st.checkbox(t["palpitations"])
+            exercise_intolerance = st.checkbox(t["exercise_intolerance"])
+
+        st.subheader("PPG Input")
         ppg_values_text = st.text_area(
-            "Paste sample PPG values separated by commas",
+            "Paste PPG values (comma separated)",
             "0.2,0.4,0.5,0.45,0.6,0.55,0.4,0.42,0.50,0.47,0.58,0.53"
         )
 
         if st.button(t["analyze"]):
-            try:
-                ppg_values = [float(x.strip()) for x in ppg_values_text.split(",") if x.strip()]
-            except:
-                ppg_values = []
 
-            # 🔵 NEW: SIGNAL QUALITY CHECK
-            quality_score, is_valid = check_signal_quality(ppg_values)
+            with st.spinner("Analyzing your data..."):
 
-            if not is_valid:
-                st.error(f"Poor signal quality (Score: {quality_score}). Please retry.")
-                st.stop()
+                try:
+                    ppg_values = [float(x.strip()) for x in ppg_values_text.split(",") if x.strip()]
+                except:
+                    ppg_values = []
 
-            # EXISTING
-            ppg_features = extract_ppg_features(ppg_values)
+                # QUALITY CHECK
+                quality_score, is_valid = check_signal_quality(ppg_values)
 
-            features = {
-                "fatigue": fatigue,
-                "dizziness": dizziness,
-                "sleep_hours": sleep_hours,
-                "stress_score": stress_score,
-                "palpitations": palpitations,
-                "exercise_intolerance": exercise_intolerance,
-                "ppg_quality_score": ppg_features["ppg_quality_score"],
-                "hr_est": ppg_features["hr_est"],
+                if not is_valid:
+                    st.error(f"Poor signal quality (Score: {quality_score})")
+                    st.stop()
 
-                # 🔵 NEW (for explainability)
-                "hr": ppg_features["hr_est"],
-                "stress": stress_score,
-                "fatigue": fatigue,
-                "hrv": ppg_features.get("hrv", 25)
-            }
+                # SIGNAL PROCESSING
+                ppg_features = extract_ppg_features(ppg_values)
 
-            result = analyze_cardiofatigue(features)
+                hr_est = ppg_features.get("hr_est", 0)
+                hrv_val = ppg_features.get("hrv", 25)
 
-            # 🔵 NEW: TREND ANALYSIS
-            history = get_user_history(st.session_state.user_id)
-            trend = compute_trend(history, features)
-            features.update(trend)
+                features = {
+                    "fatigue": fatigue,
+                    "dizziness": dizziness,
+                    "sleep_hours": sleep_hours,
+                    "stress_score": stress_score,
+                    "palpitations": palpitations,
+                    "exercise_intolerance": exercise_intolerance,
+                    "ppg_quality_score": ppg_features.get("ppg_quality_score", 0),
+                    "hr_est": hr_est,
 
-            # 🔵 NEW: EXPLAINABILITY
-            explanation = generate_explanation(
-                features,
-                prediction=1 if result["risk"] != "Low" else 0,
-                confidence=result.get("score", 0) / 100
-            )
+                    # For explainability
+                    "hr": hr_est,
+                    "stress": stress_score,
+                    "hrv": hrv_val
+                }
 
-            # 🔵 NEW: LLM (Gemini)
-            llm_output = generate_llm_response(
-                result["risk"],
-                features,
-                explanation
-            )
+                result = analyze_cardiofatigue(features)
 
-            # 🔵 NEW: UPDATE HISTORY
-            update_user_history(st.session_state.user_id, features)
+                # TREND
+                history = get_user_history(st.session_state.user_id)
+                trend = compute_trend(history, features)
+                features.update(trend)
 
-            report = {
-                "user_id": st.session_state.user_id,
-                "name": st.session_state.name,
-                "created_at": datetime.now().isoformat(),
-                "fatigue": fatigue,
-                "dizziness": dizziness,
-                "sleep_hours": sleep_hours,
-                "stress_score": stress_score,
-                "palpitations": palpitations,
-                "exercise_intolerance": exercise_intolerance,
-                "ppg_quality_score": ppg_features["ppg_quality_score"],
-                "hr_est": ppg_features["hr_est"],
-                "risk_score": result["score"],
-                "risk_label": result["risk"]
-            }
-            save_report(report)
+                # EXPLANATION
+                explanation = generate_explanation(
+                    features,
+                    prediction=1 if result["risk"] != "Low" else 0,
+                    confidence=result.get("score", 0) / 100
+                )
 
-            st.subheader("Screening Output")
-            st.success(result["risk"])
+                # LLM SAFE CALL
+                try:
+                    llm_output = generate_llm_response(result["risk"], features, explanation)
+                except:
+                    llm_output = "AI assistant unavailable."
+
+                update_user_history(st.session_state.user_id, features)
+
+                # SAVE
+                report = {
+                    "user_id": st.session_state.user_id,
+                    "name": st.session_state.name,
+                    "created_at": datetime.now().isoformat(),
+                    "fatigue": fatigue,
+                    "dizziness": dizziness,
+                    "sleep_hours": sleep_hours,
+                    "stress_score": stress_score,
+                    "palpitations": palpitations,
+                    "exercise_intolerance": exercise_intolerance,
+                    "ppg_quality_score": ppg_features.get("ppg_quality_score", 0),
+                    "hr_est": hr_est,
+                    "risk_score": result["score"],
+                    "risk_label": result["risk"]
+                }
+                save_report(report)
+
+            # ================= UI OUTPUT =================
+
+            st.subheader("Results")
+
+            # COLOR RESULT
+            if result["risk"] == "Low":
+                st.success("🟢 Low Risk")
+            elif result["risk"] == "Moderate":
+                st.warning("🟡 Moderate Risk")
+            else:
+                st.error("🔴 High Risk")
+
+            st.progress(result["score"] / 100)
+
+            # METRICS
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Heart Rate", hr_est)
+            col2.metric("Fatigue", fatigue)
+            col3.metric("Stress", stress_score)
+
             st.write(f"Risk Score: {result['score']}")
-            st.write(result["message"])
-            st.write(result["doctor_suggestion"])
 
-            # 🔵 NEW DISPLAY
             st.subheader("Signal Quality")
-            st.write(f"Quality Score: {quality_score}")
+            st.metric("Quality Score", f"{quality_score}/100")
 
-            st.subheader("Advanced Explanation")
-            st.write(explanation)
+            st.subheader("Explanation")
+            st.info(explanation)
 
             st.subheader("AI Assistant")
             st.info(llm_output)
 
+            st.subheader("Doctor Suggestion")
+            st.write(result["doctor_suggestion"])
+
             st.subheader("Signal Features")
             st.write(ppg_features)
 
-            st.subheader("Why this result")
-            for reason in result["reasons"]:
-                st.write(f"- {reason}")
-
+    # ================= HISTORY =================
     elif page == t["history"]:
         st.title("History")
         reports = load_reports()
         user_reports = [r for r in reports if r["user_id"] == st.session_state.user_id]
+
         if user_reports:
             st.dataframe(pd.DataFrame(user_reports), use_container_width=True)
         else:
             st.warning("No reports yet.")
 
+    # ================= WEEKLY MAP =================
     elif page == t["weekly_map"]:
         st.title("Weekly Map")
         reports = load_reports()
         user_reports = [r for r in reports if r["user_id"] == st.session_state.user_id]
+
         if user_reports:
             df = pd.DataFrame(user_reports)
             df["created_at"] = pd.to_datetime(df["created_at"])
             df = df.sort_values("created_at")
+
             st.line_chart(df.set_index("created_at")["risk_score"])
         else:
             st.warning("No reports yet.")
